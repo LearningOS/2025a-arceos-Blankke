@@ -67,6 +67,25 @@ impl DirNode {
         children.remove(name);
         Ok(())
     }
+
+    /// Renames a node from `src_name` to `dst_name` in this directory.
+    pub fn rename_node(&self, src_name: &str, dst_name: &str) -> VfsResult {
+        let mut children = self.children.write();
+        
+        // Check if source exists
+        let node = children.get(src_name).ok_or(VfsError::NotFound)?.clone();
+        
+        // Check if destination already exists
+        if children.contains_key(dst_name) {
+            return Err(VfsError::AlreadyExists);
+        }
+        
+        // Remove from old name and insert with new name
+        children.remove(src_name);
+        children.insert(dst_name.into(), node);
+        
+        Ok(())
+    }
 }
 
 impl VfsNodeOps for DirNode {
@@ -163,6 +182,56 @@ impl VfsNodeOps for DirNode {
         } else {
             self.remove_node(name)
         }
+    }
+
+    fn rename(&self, src_path: &str, dst_path: &str) -> VfsResult {
+        log::debug!("rename at ramfs: {} -> {}", src_path, dst_path);
+        
+        // Parse source path
+        let (src_name, src_rest) = split_path(src_path);
+        
+        // If source has more path components, navigate to the subdirectory containing source
+        if let Some(rest) = src_rest {
+            match src_name {
+                "" | "." => return self.rename(rest, dst_path),
+                ".." => return self.parent().ok_or(VfsError::NotFound)?.rename(rest, dst_path),
+                _ => {
+                    let subdir = self
+                        .children
+                        .read()
+                        .get(src_name)
+                        .ok_or(VfsError::NotFound)?
+                        .clone();
+                    return subdir.rename(rest, dst_path);
+                }
+            }
+        }
+        
+        // Source is now a simple name in current directory (src_name)
+        // Now handle destination path
+        // If dst_path starts with "/", it's likely an absolute path from the mounted filesystem
+        // We need to check if it refers to the same directory (only the last component matters)
+        let dst_name = if dst_path.starts_with('/') {
+            // Extract the last component from the absolute path
+            // For "/tmp/f2" or "/f2", we want just "f2"
+            dst_path.trim_start_matches('/').rsplit('/').next().unwrap_or("")
+        } else {
+            // Relative path - extract final component
+            let (name, rest) = split_path(dst_path);
+            if rest.is_some() {
+                // Destination has subdirectories, not supported
+                return Err(VfsError::Unsupported);
+            }
+            name
+        };
+        
+        // Both source and destination are simple names in the current directory
+        if src_name.is_empty() || src_name == "." || src_name == ".." 
+            || dst_name.is_empty() || dst_name == "." || dst_name == ".." {
+            return Err(VfsError::InvalidInput);
+        }
+        
+        self.rename_node(src_name, dst_name)
     }
 
     axfs_vfs::impl_vfs_dir_default! {}
