@@ -19,6 +19,7 @@ pub struct AddrSpace {
     va_range: VirtAddrRange,
     areas: MemorySet<Backend>,
     pt: PageTable,
+    brk: VirtAddr,
 }
 
 impl AddrSpace {
@@ -59,7 +60,18 @@ impl AddrSpace {
             va_range: VirtAddrRange::from_start_size(base, size),
             areas: MemorySet::new(),
             pt: PageTable::try_new().map_err(|_| AxError::NoMemory)?,
+            brk: VirtAddr::from(0),
         })
+    }
+
+    /// Gets the top of the heap (brk).
+    pub fn get_brk(&self) -> VirtAddr {
+        self.brk
+    }
+
+    /// Sets the top of the heap (brk).
+    pub fn set_brk(&mut self, brk: VirtAddr) {
+        self.brk = brk;
     }
 
     /// Copies page table mappings from another address space.

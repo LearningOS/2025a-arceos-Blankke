@@ -141,7 +141,7 @@ fn sys_mmap(
     offset: isize,
 ) -> isize {
     syscall_body!(sys_mmap, {
-        use axhal::mem::{VirtAddr, PAGE_SIZE_4K, phys_to_virt};
+        use axhal::mem::{VirtAddr, PAGE_SIZE_4K, phys_to_virt, MemoryAddr};
         use core::ffi::c_void;
         use alloc::vec;
         
@@ -158,10 +158,18 @@ fn sys_mmap(
         let aligned_length = (length + PAGE_SIZE_4K - 1) & !(PAGE_SIZE_4K - 1);
         
         // Find a suitable virtual address in user space
-        // For simplicity, we'll use a fixed address if addr is NULL
+        // If addr is NULL (no hint / not MAP_FIXED), use the current heap top (brk)
+        // as the mapping base. Align the base up to a page.
         let start_addr = if addr.is_null() {
-            // Try to find a suitable address - use a reasonable user space address
-            VirtAddr::from(0x10000000) // Start at 256MB - a safer user space address
+            // Use the process brk as the allocation base. If brk is uninitialized
+            // (0), fall back to a sensible default base.
+            let brk = aspace.get_brk();
+            if brk.as_usize() == 0 {
+                // initial brk fallback (aligned)
+                VirtAddr::from(0x10000000usize).align_up_4k()
+            } else {
+                brk.align_up_4k()
+            }
         } else {
             VirtAddr::from(addr as usize)
         };
