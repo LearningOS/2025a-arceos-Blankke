@@ -138,9 +138,72 @@ fn sys_mmap(
     prot: i32,
     flags: i32,
     fd: i32,
-    _offset: isize,
+    offset: isize,
 ) -> isize {
-    unimplemented!("no sys_mmap!");
+    syscall_body!(sys_mmap, {
+        use axhal::mem::{VirtAddr, PAGE_SIZE_4K, MemoryAddr};
+        use core::ffi::c_void;
+        use alloc::vec;
+        use memory_addr::VirtAddrRange;
+        
+        let prot_flags = MmapProt::from_bits(prot).ok_or(LinuxError::EINVAL)?;
+        let mmap_flags = MmapFlags::from_bits(flags).ok_or(LinuxError::EINVAL)?;
+        
+        // Convert protection flags to mapping flags
+        let mapping_flags = MappingFlags::from(prot_flags);
+        
+        let curr = current();
+        let mut aspace = curr.task_ext().aspace.lock();
+        
+        // Align size to page boundary
+        let aligned_length = (length + PAGE_SIZE_4K - 1) & !(PAGE_SIZE_4K - 1);
+        
+        // Find a suitable virtual address in user space
+        let start_addr = if addr.is_null() {
+            // Use find_free_area to find a suitable address
+            // Start searching from a reasonable user space address
+            let hint = VirtAddr::from(0x10000000usize);
+            let limit = VirtAddrRange::from_start_size(aspace.base(), aspace.size());
+            aspace.find_free_area(hint, aligned_length, limit)
+                .ok_or(LinuxError::ENOMEM)?
+        } else {
+            VirtAddr::from(addr as usize)
+        };
+        
+        // Map memory in user address space
+        aspace.map_alloc(start_addr, aligned_length, mapping_flags, true)
+            .map_err(|_| LinuxError::ENOMEM)?;
+        
+        // If it's not anonymous mapping, read from file
+        if !mmap_flags.contains(MmapFlags::MAP_ANONYMOUS) {
+            if fd < 0 {
+                return Err(LinuxError::EBADF);
+            }
+            
+            // Read file content into a temporary buffer
+            let mut file_data = vec![0u8; length];
+            
+            // Seek to the specified offset if needed
+            if offset > 0 {
+                let seek_result = api::sys_lseek(fd, offset as i64, 0); // 0 = SEEK_SET
+                if seek_result < 0 {
+                    return Err(LinuxError::EIO);
+                }
+            }
+            
+            // Read file content
+            let n = api::sys_read(fd, file_data.as_mut_ptr() as *mut c_void, length);
+            if n < 0 {
+                return Err(LinuxError::EIO);
+            }
+            
+            // Write file data to the mapped memory
+            aspace.write(start_addr, &file_data[..n as usize])
+                .map_err(|_| LinuxError::EIO)?;
+        }
+        
+        Ok(start_addr.as_usize())
+    })
 }
 
 fn sys_openat(dfd: c_int, fname: *const c_char, flags: c_int, mode: api::ctypes::mode_t) -> isize {
