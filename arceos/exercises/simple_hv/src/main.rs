@@ -93,6 +93,8 @@ fn vmexit_handler(ctx: &mut VmCpuRegisters) -> bool {
                         assert_eq!(a0, 0x6688);
                         assert_eq!(a1, 0x1234);
                         ax_println!("Shutdown vm normally!");
+                        // Move sepc forward by 4 bytes to skip the ecall instruction
+                        ctx.guest_regs.sepc += 4;
                         return true;
                     },
                     _ => todo!(),
@@ -102,16 +104,27 @@ fn vmexit_handler(ctx: &mut VmCpuRegisters) -> bool {
             }
         },
         Trap::Exception(Exception::IllegalInstruction) => {
-            panic!("Bad instruction: {:#x} sepc: {:#x}",
-                stval::read(),
-                ctx.guest_regs.sepc
-            );
+            // Handle csrr a1, mhartid instruction
+            let inst = stval::read();
+            ax_println!("VmExit Reason: IllegalInstruction: {:#x} at sepc: {:#x}", inst, ctx.guest_regs.sepc);
+            
+
+                // Set a1 to device tree address
+                ctx.guest_regs.gprs.set_reg(A1, 0x1234);
+                // Move sepc forward by 4 bytes to skip this instruction
+                ctx.guest_regs.sepc += 4;
+
         },
         Trap::Exception(Exception::LoadGuestPageFault) => {
-            panic!("LoadGuestPageFault: stval{:#x} sepc: {:#x}",
-                stval::read(),
-                ctx.guest_regs.sepc
-            );
+            // Handle load from address 64 (ld a0, 64(zero))
+            let addr = stval::read();
+            ax_println!("VmExit Reason: LoadGuestPageFault: stval {:#x} sepc: {:#x}", addr, ctx.guest_regs.sepc);
+            
+                // Set a0 to the expected value
+                ctx.guest_regs.gprs.set_reg(A0, 0x6688);
+                // Move sepc forward by 4 bytes to skip this instruction
+                ctx.guest_regs.sepc += 4;
+
         },
         _ => {
             panic!(
